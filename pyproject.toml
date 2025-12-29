@@ -7,11 +7,9 @@ name = "whisperlivekit"
 version = "0.2.17"
 description = "Real-time speech-to-text with speaker diarization using Whisper"
 readme = "README.md"
-authors = [
-    { name = "Quentin Fuxa" }
-]
+authors = [{ name = "Quentin Fuxa" }]
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.10,<3.13"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -20,25 +18,26 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Programming Language :: Python :: 3.15",
+
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Multimedia :: Sound/Audio :: Speech"
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
     "fastapi",
     "librosa",
+    "numba",
     "soundfile",
     "uvicorn",
     "websockets",
     "torchaudio>=2.0.0",
     "torch>=2.0.0",
-    "huggingface-hub>=0.25.0",
+    "huggingface-hub",
     "faster-whisper>=1.2.0",
     "tqdm",
     "tiktoken",
-    'triton>=2.0.0; platform_machine == "x86_64" and (sys_platform == "linux" or sys_platform == "linux2")'
+    'triton>=2.0.0; platform_machine == "x86_64" and (sys_platform == "linux" or sys_platform == "linux2")',
+    "sounddevice>=0.5.3",
+    "nemo-toolkit[asr]",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +50,7 @@ Homepage = "https://github.com/QuentinFuxa/WhisperLiveKit"
 [project.scripts]
 whisperlivekit-server = "whisperlivekit.basic_server:main"
 wlk = "whisperlivekit.basic_server:main"
+wlk-client = "whisperlivekit.basic_client:main"
 
 [tool.setuptools]
 packages = [
@@ -62,10 +62,13 @@ packages = [
     "whisperlivekit.whisper.normalizers",
     "whisperlivekit.web",
     "whisperlivekit.local_agreement",
-    "whisperlivekit.silero_vad_models"
+    "whisperlivekit.silero_vad_models",
 ]
 
 [tool.setuptools.package-data]
 whisperlivekit = ["web/*.html", "web/*.css", "web/*.js", "web/src/*.svg"]
 "whisperlivekit.whisper.assets" = ["*.tiktoken", "*.npz"]
 "whisperlivekit.silero_vad_models" = ["*.jit", "*.onnx"]
+
+[tool.uv.sources]
+nemo-toolkit = { git = "https://github.com/NVIDIA/NeMo.git", rev = "main" }

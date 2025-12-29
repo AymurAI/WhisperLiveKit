@@ -1,7 +1,10 @@
-FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
+# Build stage
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
 
 WORKDIR /app
 
@@ -9,76 +12,94 @@ ARG EXTRAS
 ARG HF_PRECACHE_DIR
 ARG HF_TKN_FILE
 
+# Install build dependencies and Python
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        python3 \
-        python3-pip \
-        python3-venv \
-        ffmpeg \
-        git \
-        build-essential \
-        python3-dev \
-        ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  git \
+  build-essential \
+  ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Copy uv binary from official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# timeout/retries for large torch wheels
-RUN pip3 install --upgrade pip setuptools wheel && \
-    pip3 --disable-pip-version-check install --timeout=120 --retries=5 \
-        --index-url https://download.pytorch.org/whl/cu129 \
-        torch torchaudio \
-    || (echo "Initial install failed — retrying with extended timeout..." && \
-        pip3 --disable-pip-version-check install --timeout=300 --retries=3 \
-            --index-url https://download.pytorch.org/whl/cu129 \
-            torch torchvision torchaudio)
+# Install PyTorch with CUDA support first (before other dependencies)
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv venv -p 3.12 && \
+  uv pip install --index-url https://download.pytorch.org/whl/cu129 torch torchaudio
 
-COPY . .
+# Copy only necessary files for dependency resolution
+COPY pyproject.toml uv.lock ./
 
-# Install WhisperLiveKit directly, allowing for optional dependencies
-# Example: --build-arg EXTRAS="translation"
-RUN if [ -n "$EXTRAS" ]; then \
-      echo "Installing with extras: [$EXTRAS]"; \
-      pip install --no-cache-dir "whisperlivekit[$EXTRAS]"; \
-    else \
-      echo "Installing base package only"; \
-      pip install --no-cache-dir whisperlivekit; \
-    fi
+# Install dependencies without the project itself (for better caching)
+RUN --mount=type=cache,target=/root/.cache/uv \
+  uv sync --frozen --no-install-project
 
-# In-container caching for Hugging Face models by: 
-# A) Make the cache directory persistent via an anonymous volume.
-#    Note: This only persists for a single, named container. This is 
-#          only for convenience at de/test stage. 
-#          For prod, it is better to use a named volume via host mount/k8s.
-VOLUME ["/root/.cache/huggingface/hub"]
+# Copy the source code
+COPY whisperlivekit ./whisperlivekit
 
+# Sync the project with optional extras
+RUN --mount=type=cache,target=/root/.cache/uv \
+  if [ -n "$EXTRAS" ]; then \
+  echo "Installing with extras: $EXTRAS"; \
+  uv sync --frozen --no-editable --extra "$EXTRAS"; \
+  else \
+  echo "Installing base package only"; \
+  uv sync --frozen --no-editable; \
+  fi
 
-# or
-# B) Conditionally copy a local pre-cache from the build context to the 
-#    container's cache via the HF_PRECACHE_DIR build-arg.
-#    WARNING: This will copy ALL files in the pre-cache location.
-
-# Conditionally copy a cache directory if provided
+# Copy pre-cached models if provided
+RUN mkdir -p /root/.cache/huggingface
 RUN if [ -n "$HF_PRECACHE_DIR" ]; then \
-      echo "Copying Hugging Face cache from $HF_PRECACHE_DIR"; \
-      mkdir -p /root/.cache/huggingface/hub && \
-      cp -r $HF_PRECACHE_DIR/* /root/.cache/huggingface/hub; \
-    else \
-      echo "No local Hugging Face cache specified, skipping copy"; \
-    fi
+  echo "Copying Hugging Face cache from $HF_PRECACHE_DIR"; \
+  mkdir -p /root/.cache/huggingface/hub && \
+  cp -r $HF_PRECACHE_DIR/* /root/.cache/huggingface/hub; \
+  else \
+  echo "No local Hugging Face cache specified, skipping copy"; \
+  fi
 
-# Conditionally copy a Hugging Face token if provided. Useful for Diart backend (pyannote audio models)
+# Copy Hugging Face token if provided
 RUN if [ -n "$HF_TKN_FILE" ]; then \
-      echo "Copying Hugging Face token from $HF_TKN_FILE"; \
-      mkdir -p /root/.cache/huggingface && \
-      cp $HF_TKN_FILE /root/.cache/huggingface/token; \
-    else \
-      echo "No Hugging Face token file specified, skipping token setup"; \
-    fi
+  echo "Copying Hugging Face token from $HF_TKN_FILE"; \
+  mkdir -p /root/.cache/huggingface && \
+  cp $HF_TKN_FILE /root/.cache/huggingface/token; \
+  else \
+  echo "No Hugging Face token file specified, skipping token setup"; \
+  fi
+
+# Runtime stage
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && \
+  apt-get install -y --no-install-recommends \
+  ffmpeg \
+  ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+
+# Copy virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /root/.local /root/.local
+ENV PATH="/app/.venv/bin:$PATH"
+
+
+
+# Copy Hugging Face cache from builder (if exists)
+COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
+
+# Make the cache directory persistent via volume
+VOLUME ["/root/.cache/huggingface/hub"]
 
 EXPOSE 8000
 
-ENTRYPOINT ["whisperlivekit-server", "--host", "0.0.0.0"]
+ENTRYPOINT ["uv", "run", "whisperlivekit-server", "--host", "0.0.0.0"]
 
-CMD ["--model", "medium"]
+CMD ["--model", "medium", "--diarization", "--pcm-input"]
