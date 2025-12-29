@@ -29,14 +29,14 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies without the project itself (for better caching)
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=tmpfs,target=/root/.cache/uv \
   uv sync --frozen --no-install-project
 
 # Copy the source code
 COPY whisperlivekit ./whisperlivekit
 
 # Sync the project with optional extras
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=tmpfs,target=/root/.cache/uv \
   if [ -n "$EXTRAS" ]; then \
   echo "Installing with extras: $EXTRAS"; \
   uv sync --frozen --extra "$EXTRAS"; \

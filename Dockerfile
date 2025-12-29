@@ -24,7 +24,7 @@ RUN apt-get update && \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Install PyTorch with CUDA support first (before other dependencies)
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=tmpfs,target=/root/.cache/uv \
   uv venv -p 3.12 && \
   uv pip install --index-url https://download.pytorch.org/whl/cu129 torch torchaudio
 
@@ -32,14 +32,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies without the project itself (for better caching)
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=tmpfs,target=/root/.cache/uv \
   uv sync --frozen --no-install-project
 
 # Copy the source code
 COPY whisperlivekit ./whisperlivekit
 
 # Sync the project with optional extras
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=tmpfs,target=/root/.cache/uv \
   if [ -n "$EXTRAS" ]; then \
   echo "Installing with extras: $EXTRAS"; \
   uv sync --frozen --no-editable --extra "$EXTRAS"; \
