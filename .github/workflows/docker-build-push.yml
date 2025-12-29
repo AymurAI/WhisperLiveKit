@@ -21,8 +21,8 @@ jobs:
         include:
           - dockerfile: Dockerfile
             suffix: ""
-          - dockerfile: Dockerfile.cpu
-            suffix: "-cpu"
+          # - dockerfile: Dockerfile.cpu
+          #   suffix: "-cpu"
 
     steps:
       - name: Checkout repository
