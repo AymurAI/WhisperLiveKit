@@ -68,6 +68,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--emit-speaker-embeddings",
+        action="store_true",
+        default=True,
+        help="Emit per-speaker embeddings at end of stream (backend-dependent).",
+    )
+
+    parser.add_argument(
         "--no-transcription",
         action="store_true",
         help="Disable transcription to only see live diarization results.",

@@ -2,13 +2,14 @@ import asyncio
 import logging
 import traceback
 from time import time
-from typing import Any, AsyncGenerator, List, Optional, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import numpy as np
 
 from whisperlivekit.core import (TranscriptionEngine,
                                  online_diarization_factory, online_factory,
                                  online_translation_factory)
+from whisperlivekit.embedding_ids import build_speaker_hashes
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
 from whisperlivekit.timed_objects import (ASRToken, ChangeSpeaker, FrontData,
@@ -79,8 +80,11 @@ class AudioProcessor:
         self.lock: asyncio.Lock = asyncio.Lock()
         self.sep: str = " "  # Default separator
         self.last_response_content: FrontData = FrontData()
+        self.speaker_ids: Dict[int, str] = {}
+        self.speaker_hash_bits: int = 256
 
         self.tokens_alignment: TokensAlignment = TokensAlignment(self.state, self.args, self.sep)
+        self.tokens_alignment.speaker_ids = self.speaker_ids
         self.beg_loop: Optional[float] = None
 
         # Models and processing
@@ -201,6 +205,34 @@ class AudioProcessor:
             self.state.remaining_time_diarization = remaining_diarization
 
             return self.state
+
+    def update_speaker_ids_from_embeddings(self, embeddings: Dict[Any, Any]) -> Dict[int, str]:
+        """Derive deterministic speaker IDs from embedding vectors."""
+        mapping = build_speaker_hashes(embeddings, bits=self.speaker_hash_bits)
+        self.speaker_ids.clear()
+        self.speaker_ids.update(mapping)
+        return mapping
+
+    def get_model_metadata(self) -> Dict[str, Any]:
+        """Return lightweight model identifiers for ASR and diarization."""
+        meta: Dict[str, Any] = {}
+        try:
+            if self.asr:
+                model_name = getattr(self.asr, "model_name", None) or self.asr.__class__.__name__
+                backend = getattr(self.asr, "encoder_backend", None) or getattr(self.asr, "backend_choice", None)
+                meta["asr_model"] = model_name
+                if backend:
+                    meta["asr_backend"] = backend
+            if self.diarization:
+                diar_name = getattr(self.diarization, "model_name", None)
+                if diar_name is None and hasattr(self.diarization, "diar_model"):
+                    diar_name = getattr(self.diarization.diar_model, "pretrained_model_name", None) or getattr(self.diarization.diar_model, "model_name", None)
+                meta["diarization_model"] = diar_name or self.args.diarization_backend
+                meta["diarization_backend"] = self.args.diarization_backend
+        except Exception:
+            # Metadata is best-effort; avoid breaking the stream if anything is missing.
+            pass
+        return meta
 
     async def ffmpeg_stdout_reader(self) -> None:
         """Read audio data from FFmpeg stdout and process it into the PCM pipeline."""
@@ -427,7 +459,8 @@ class AudioProcessor:
                     buffer_diarization=buffer_diarization_text,
                     buffer_translation=buffer_translation_text,
                     remaining_time_transcription=state.remaining_time_transcription,
-                    remaining_time_diarization=state.remaining_time_diarization if self.args.diarization else 0
+                    remaining_time_diarization=state.remaining_time_diarization if self.args.diarization else 0,
+                    speaker_ids=dict(self.speaker_ids)
                 )
 
                 should_push = (response != self.last_response_content)

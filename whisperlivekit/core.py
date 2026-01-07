@@ -44,6 +44,7 @@ class TranscriptionEngine:
             "transcription": True,
             "vad": True,
             "pcm_input": False,
+            "emit_speaker_embeddings": False,
             "disable_punctuation_split" : False,
             "diarization_backend": "sortformer",
             "backend_policy": "simulstreaming",
@@ -186,6 +187,8 @@ def online_diarization_factory(args, diarization_backend):
     if args.diarization_backend == "diart":
         online = diarization_backend
         # Not the best here, since several user/instances will share the same backend, but diart is not SOTA anymore and sortformer is recommended
+        if getattr(args, "emit_speaker_embeddings", False):
+            raise NotImplementedError("DIART backend does not support speaker embeddings; disable --emit-speaker-embeddings or switch diarization backend.")
     
     if args.diarization_backend == "sortformer":
         from whisperlivekit.diarization.sortformer_backend import \
