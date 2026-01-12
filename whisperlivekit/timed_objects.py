@@ -129,6 +129,8 @@ class Segment(TimedText):
     translation: Optional[Translation] = None
     is_final: bool = False
     speaker_id: Optional[str] = None
+    speaker_candidates: Optional[List[Dict[str, Any]]] = None
+    candidates_final: Optional[bool] = None
 
     @classmethod
     def from_tokens(
@@ -168,6 +170,10 @@ class Segment(TimedText):
         }
         if self.speaker_id:
             _dict["speaker_id"] = self.speaker_id
+        if self.speaker_candidates is not None:
+            _dict["speaker_candidates"] = self.speaker_candidates
+        if self.candidates_final is not None:
+            _dict["candidates_final"] = self.candidates_final
         if self.translation:
             _dict["translation"] = self.translation
         if self.detected_language:

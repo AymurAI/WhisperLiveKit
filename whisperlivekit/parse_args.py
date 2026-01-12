@@ -1,9 +1,14 @@
-
 from argparse import ArgumentParser
 
 
 def parse_args():
     parser = ArgumentParser(description="Whisper FastAPI Online Server")
+    parser.add_argument(
+        "app",
+        type=str,
+        default="whisperlivekit.basic_server:app",
+        help="The FastAPI app to run.",
+    )
     parser.add_argument(
         "--host",
         type=str,
@@ -34,7 +39,7 @@ def parse_args():
     parser.add_argument(
         "--diarization",
         action="store_true",
-        default=False,
+        default=True,
         help="Enable speaker diarization.",
     )
 
@@ -58,6 +63,18 @@ def parse_args():
         default="pyannote/embedding",
         help="Hugging Face model ID for pyannote.audio embedding model.",
     )
+    parser.add_argument(
+        "--chroma-path",
+        type=str,
+        default="data/chroma",
+        help="Directory for persistent ChromaDB storage.",
+    )
+    parser.add_argument(
+        "--chroma-collection",
+        type=str,
+        default="speakers",
+        help="ChromaDB collection name for speaker embeddings.",
+    )
 
     parser.add_argument(
         "--diarization-backend",
@@ -79,28 +96,28 @@ def parse_args():
         action="store_true",
         help="Disable transcription to only see live diarization results.",
     )
-    
+
     parser.add_argument(
         "--disable-punctuation-split",
         action="store_true",
         help="Disable the split parameter.",
     )
-    
+
     parser.add_argument(
         "--min-chunk-size",
         type=float,
         default=0.1,
         help="Minimum audio chunk size in seconds. It waits up to this time to do processing. If the processing takes shorter time, it waits, otherwise it processes the whole segment that was received by this time.",
     )
-    
+
     parser.add_argument(
         "--model",
         type=str,
-        default="base",
-        dest='model_size',
+        default="medium",
+        dest="model_size",
         help="Name size of the Whisper model to use (default: tiny). Suggested values: tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo. The model is automatically downloaded from the model hub if not present in model cache dir.",
     )
-    
+
     parser.add_argument(
         "--model_cache_dir",
         type=str,
@@ -124,8 +141,8 @@ def parse_args():
         "--lan",
         "--language",
         type=str,
-        default="auto",
-        dest='lan',
+        default="es",
+        dest="lan",
         help="Source language code, e.g. en,de,cs, or 'auto' for language detection.",
     )
     parser.add_argument(
@@ -134,14 +151,14 @@ def parse_args():
         default=False,
         help="Use Whisper to directly translate to english.",
     )
-    
+
     parser.add_argument(
         "--target-language",
         type=str,
         default="",
         dest="target_language",
         help="Target language for translation. Not functional yet.",
-    )    
+    )
 
     parser.add_argument(
         "--backend-policy",
@@ -172,7 +189,7 @@ def parse_args():
         action="store_true",
         help="Disable VAD (voice activity detection).",
     )
-    
+
     parser.add_argument(
         "--buffer_trimming",
         type=str,
@@ -194,17 +211,34 @@ def parse_args():
         help="Set the log level",
         default="DEBUG",
     )
-    parser.add_argument("--ssl-certfile", type=str, help="Path to the SSL certificate file.", default=None)
-    parser.add_argument("--ssl-keyfile", type=str, help="Path to the SSL private key file.", default=None)
-    parser.add_argument("--forwarded-allow-ips", type=str, help="Allowed ips for reverse proxying.", default=None)
+    parser.add_argument(
+        "--ssl-certfile",
+        type=str,
+        help="Path to the SSL certificate file.",
+        default=None,
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        type=str,
+        help="Path to the SSL private key file.",
+        default=None,
+    )
+    parser.add_argument(
+        "--forwarded-allow-ips",
+        type=str,
+        help="Allowed ips for reverse proxying.",
+        default=None,
+    )
     parser.add_argument(
         "--pcm-input",
         action="store_true",
-        default=False,
-        help="If set, raw PCM (s16le) data is expected as input and FFmpeg will be bypassed. Frontend will use AudioWorklet instead of MediaRecorder."
+        default=True,
+        help="If set, raw PCM (s16le) data is expected as input and FFmpeg will be bypassed. Frontend will use AudioWorklet instead of MediaRecorder.",
     )
     # SimulStreaming-specific arguments
-    simulstreaming_group = parser.add_argument_group('SimulStreaming arguments (only used with --backend simulstreaming)')
+    simulstreaming_group = parser.add_argument_group(
+        "SimulStreaming arguments (only used with --backend simulstreaming)"
+    )
 
     simulstreaming_group.add_argument(
         "--disable-fast-encoder",
@@ -220,7 +254,7 @@ def parse_args():
         default=None,
         help="Use your own alignment heads, useful when `--model-dir` is used",
     )
-    
+
     simulstreaming_group.add_argument(
         "--frame-threshold",
         type=int,
@@ -228,7 +262,7 @@ def parse_args():
         dest="frame_threshold",
         help="Threshold for the attention-guided decoding. The AlignAtt policy will decode only until this number of frames from the end of audio. In frames: one frame is 0.02 seconds for large-v3 model.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--beams",
         "-b",
@@ -236,7 +270,7 @@ def parse_args():
         default=1,
         help="Number of beams for beam search decoding. If 1, GreedyDecoder is used.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--decoder",
         type=str,
@@ -245,7 +279,7 @@ def parse_args():
         choices=["beam", "greedy"],
         help="Override automatic selection of beam or greedy decoder. If beams > 1 and greedy: invalid.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--audio-max-len",
         type=float,
@@ -253,7 +287,7 @@ def parse_args():
         dest="audio_max_len",
         help="Max length of the audio buffer, in seconds.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--audio-min-len",
         type=float,
@@ -261,7 +295,7 @@ def parse_args():
         dest="audio_min_len",
         help="Skip processing if the audio buffer is shorter than this length, in seconds. Useful when the --min-chunk-size is small.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--cif-ckpt-path",
         type=str,
@@ -269,7 +303,7 @@ def parse_args():
         dest="cif_ckpt_path",
         help="The file path to the Simul-Whisper's CIF model checkpoint that detects whether there is end of word at the end of the chunk. If not, the last decoded space-separated word is truncated because it is often wrong -- transcribing a word in the middle. The CIF model adapted for the Whisper model version should be used. Find the models in https://github.com/backspacetg/simul_whisper/tree/main/cif_models . Note that there is no model for large-v3.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--never-fire",
         action="store_true",
@@ -277,7 +311,7 @@ def parse_args():
         dest="never_fire",
         help="Override the CIF model. If True, the last word is NEVER truncated, no matter what the CIF model detects. If False: if CIF model path is set, the last word is SOMETIMES truncated, depending on the CIF detection. Otherwise, if the CIF model path is not set, the last word is ALWAYS trimmed.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--init-prompt",
         type=str,
@@ -285,7 +319,7 @@ def parse_args():
         dest="init_prompt",
         help="Init prompt for the model. It should be in the target language.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--static-init-prompt",
         type=str,
@@ -293,7 +327,7 @@ def parse_args():
         dest="static_init_prompt",
         help="Do not scroll over this text. It can contain terminology that should be relevant over all document.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--max-context-tokens",
         type=int,
@@ -301,7 +335,7 @@ def parse_args():
         dest="max_context_tokens",
         help="Max context tokens for the model. Default is 0.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--model-path",
         type=str,
@@ -309,14 +343,14 @@ def parse_args():
         dest="model_path",
         help="Direct path to the SimulStreaming Whisper .pt model file. Overrides --model for SimulStreaming backend.",
     )
-    
+
     simulstreaming_group.add_argument(
         "--nllb-backend",
         type=str,
         default="transformers",
         help="transformers or ctranslate2",
     )
-    
+
     simulstreaming_group.add_argument(
         "--nllb-size",
         type=str,
@@ -325,15 +359,15 @@ def parse_args():
     )
 
     args = parser.parse_args()
-    
+
     args.transcription = not args.no_transcription
-    args.vad = not args.no_vad    
-    delattr(args, 'no_transcription')
-    delattr(args, 'no_vad')
+    args.vad = not args.no_vad
+    delattr(args, "no_transcription")
+    delattr(args, "no_vad")
 
     if args.backend_policy == "1":
         args.backend_policy = "simulstreaming"
     elif args.backend_policy == "2":
         args.backend_policy = "localagreement"
-    
+
     return args

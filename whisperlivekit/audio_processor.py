@@ -11,6 +11,7 @@ from whisperlivekit.core import (TranscriptionEngine,
                                  online_translation_factory)
 from whisperlivekit.embedding_ids import build_speaker_hashes
 from whisperlivekit.ffmpeg_manager import FFmpegManager, FFmpegState
+from whisperlivekit.speaker_store import SpeakerStore
 from whisperlivekit.silero_vad_iterator import FixedVADIterator, OnnxWrapper, load_jit_vad
 from whisperlivekit.timed_objects import (ASRToken, ChangeSpeaker, FrontData,
                                           Segment, Silence, State, Transcript)
@@ -58,6 +59,12 @@ class AudioProcessor:
     def __init__(self, **kwargs: Any) -> None:
         """Initialize the audio processor with configuration, models, and state."""
 
+        speaker_store = kwargs.pop("speaker_store", None)
+        return_candidates = bool(kwargs.pop("return_candidates", False))
+        candidate_topk = int(kwargs.pop("candidate_topk", 3))
+        candidate_threshold = float(kwargs.pop("candidate_threshold", 0.75))
+        speaker_update_interval = float(kwargs.pop("speaker_update_interval", 0.0))
+
         if 'transcription_engine' in kwargs and isinstance(kwargs['transcription_engine'], TranscriptionEngine):
             models = kwargs['transcription_engine']
         else:
@@ -82,9 +89,22 @@ class AudioProcessor:
         self.last_response_content: FrontData = FrontData()
         self.speaker_ids: Dict[int, str] = {}
         self.speaker_hash_bits: int = 256
+        self.speaker_store: Optional[SpeakerStore] = speaker_store
+        self.return_candidates: bool = return_candidates
+        self.candidate_topk: int = max(0, candidate_topk)
+        self.candidate_threshold: float = candidate_threshold
+        self.speaker_candidates: Dict[str, List[Dict[str, Any]]] = {}
+        self.candidates_final: bool = False
+        self._final_candidates_sent: bool = False
+        self._last_speaker_update: float = 0.0
+        self.speaker_update_interval: float = max(0.0, speaker_update_interval)
+        self.speaker_update_lock: asyncio.Lock = asyncio.Lock()
+        self.speaker_source_model: Optional[str] = None
 
         self.tokens_alignment: TokensAlignment = TokensAlignment(self.state, self.args, self.sep)
         self.tokens_alignment.speaker_ids = self.speaker_ids
+        self.tokens_alignment.speaker_candidates = self.speaker_candidates
+        self.tokens_alignment.candidates_final = self.candidates_final
         self.beg_loop: Optional[float] = None
 
         # Models and processing
@@ -133,6 +153,8 @@ class AudioProcessor:
             self.diarization = online_diarization_factory(self.args, models.diarization_model)
         if models.translation_model:
             self.translation = online_translation_factory(self.args, models.translation_model)
+
+        self.speaker_source_model = self._resolve_speaker_source_model()
 
     async def _push_silence_event(self) -> None:
         if self.transcription_queue:
@@ -212,6 +234,87 @@ class AudioProcessor:
         self.speaker_ids.clear()
         self.speaker_ids.update(mapping)
         return mapping
+
+    def _resolve_speaker_source_model(self) -> Optional[str]:
+        meta = self.get_model_metadata()
+        if meta.get("diarization_model"):
+            return meta["diarization_model"]
+        if getattr(self.args, "embedding_model", None):
+            return self.args.embedding_model
+        if meta.get("asr_model"):
+            return meta["asr_model"]
+        return getattr(self.args, "diarization_backend", None)
+
+    def _store_speaker_embeddings(
+        self,
+        embeddings: Dict[Any, Any],
+        speaker_ids: Dict[int, str],
+    ) -> None:
+        if not self.speaker_store:
+            return
+        source_model = self.speaker_source_model or getattr(
+            self.args, "diarization_backend", "unknown"
+        )
+        for spk, emb in embeddings.items():
+            spk_id = speaker_ids.get(int(spk))
+            if not spk_id:
+                continue
+            self.speaker_store.upsert_speaker(
+                spk_id,
+                emb,
+                source_model=source_model,
+            )
+
+    def _collect_candidates(
+        self,
+        embeddings: Dict[Any, Any],
+        speaker_ids: Dict[int, str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        if not self.speaker_store or self.candidate_topk <= 0:
+            return {}
+        candidates: Dict[str, List[Dict[str, Any]]] = {}
+        for spk, emb in embeddings.items():
+            spk_id = speaker_ids.get(int(spk))
+            if not spk_id:
+                continue
+            candidates[spk_id] = self.speaker_store.query_candidates(
+                emb,
+                topk=self.candidate_topk,
+                threshold=self.candidate_threshold,
+            )
+        return candidates
+
+    async def maybe_update_speakers(self, finalize: bool = False) -> None:
+        if not self.diarization or not hasattr(self.diarization, "get_speaker_embeddings"):
+            return
+        if not finalize:
+            now = time()
+            if now - self._last_speaker_update < self.speaker_update_interval:
+                return
+            self._last_speaker_update = now
+        async with self.speaker_update_lock:
+            try:
+                embeddings = await asyncio.to_thread(
+                    self.diarization.get_speaker_embeddings
+                )
+            except Exception as e:
+                logger.debug(f"Failed to collect speaker embeddings: {e}")
+                return
+            if not embeddings:
+                return
+            speaker_ids = self.update_speaker_ids_from_embeddings(embeddings)
+            if self.speaker_store:
+                await asyncio.to_thread(
+                    self._store_speaker_embeddings, embeddings, speaker_ids
+                )
+            if self.return_candidates and self.speaker_store:
+                candidate_map = await asyncio.to_thread(
+                    self._collect_candidates, embeddings, speaker_ids
+                )
+                self.speaker_candidates.clear()
+                self.speaker_candidates.update(candidate_map)
+            self.candidates_final = finalize
+            self.tokens_alignment.candidates_final = self.candidates_final
 
     def get_model_metadata(self) -> Dict[str, Any]:
         """Return lightweight model identifiers for ASR and diarization."""
@@ -393,6 +496,7 @@ class AudioProcessor:
                 async with self.lock:
                     self.state.new_diarization = diarization_segments
                     self.state.end_attributed_speaker = max(self.state.end_attributed_speaker, diar_end)
+                await self.maybe_update_speakers()
             except Exception as e:
                 logger.warning(f"Exception in diarization_processor: {e}")
                 logger.warning(f"Traceback: {traceback.format_exc()}")
@@ -469,6 +573,37 @@ class AudioProcessor:
                     self.last_response_content = response
 
                 if self.is_stopping and self._processing_tasks_done():
+                    if not self._final_candidates_sent:
+                        await self.maybe_update_speakers(finalize=True)
+                        self._final_candidates_sent = True
+                        self.tokens_alignment.update()
+                        final_lines, final_buffer_diar, final_buffer_trans = (
+                            self.tokens_alignment.get_lines(
+                                diarization=self.args.diarization,
+                                translation=bool(self.translation),
+                                current_silence=self.current_silence,
+                            )
+                        )
+                        final_state = await self.get_current_state()
+                        final_buffer_transcription = (
+                            final_state.buffer_transcription.text
+                            if final_state.buffer_transcription
+                            else ""
+                        )
+                        final_response_status = response_status
+                        final_response = FrontData(
+                            status=final_response_status,
+                            lines=final_lines,
+                            buffer_transcription=final_buffer_transcription,
+                            buffer_diarization=final_buffer_diar,
+                            buffer_translation=final_buffer_trans,
+                            remaining_time_transcription=final_state.remaining_time_transcription,
+                            remaining_time_diarization=final_state.remaining_time_diarization if self.args.diarization else 0,
+                            speaker_ids=dict(self.speaker_ids),
+                        )
+                        if final_response != self.last_response_content:
+                            yield final_response
+                            self.last_response_content = final_response
                     logger.info("Results formatter: All upstream processors are done and in stopping state. Terminating.")
                     return
 

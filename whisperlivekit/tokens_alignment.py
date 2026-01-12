@@ -32,6 +32,8 @@ class TokensAlignment:
         self.sep: str = sep if sep is not None else " "
         self.beg_loop: Optional[float] = None
         self.speaker_ids: Dict[int, str] = {}
+        self.speaker_candidates: Dict[str, List[Dict[str, Any]]] = {}
+        self.candidates_final: bool = False
 
         self.validated_segments: List[Segment] = []
         self.current_line_tokens: List[ASRToken] = []
@@ -171,9 +173,16 @@ class TokensAlignment:
                             max_overlap = intersec
                             max_overlap_speaker = diarization_segment.speaker + 1
                     punctuation_segment.speaker = max_overlap_speaker
-                    punctuation_segment.speaker_id = self.speaker_ids.get(
-                        max_overlap_speaker - 1
-                    )
+                    speaker_id = self.speaker_ids.get(max_overlap_speaker - 1)
+                    punctuation_segment.speaker_id = speaker_id
+                    if speaker_id and self.speaker_candidates:
+                        punctuation_segment.speaker_candidates = (
+                            self.speaker_candidates.get(speaker_id)
+                        )
+                        if punctuation_segment.speaker_candidates is not None:
+                            punctuation_segment.candidates_final = (
+                                self.candidates_final
+                            )
 
         segments = []
         if punctuation_segments:
@@ -185,6 +194,9 @@ class TokensAlignment:
                     segments[-1].end = segment.end
                     if not segments[-1].speaker_id:
                         segments[-1].speaker_id = segment.speaker_id
+                    if not segments[-1].speaker_candidates:
+                        segments[-1].speaker_candidates = segment.speaker_candidates
+                        segments[-1].candidates_final = segment.candidates_final
                 else:
                     segments.append(segment)
 

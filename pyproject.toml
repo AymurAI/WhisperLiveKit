@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
 dependencies = [
+    "chromadb",
     "fastapi",
     "librosa",
     "numba",
