@@ -4,12 +4,6 @@ from argparse import ArgumentParser
 def parse_args():
     parser = ArgumentParser(description="Whisper FastAPI Online Server")
     parser.add_argument(
-        "app",
-        type=str,
-        default="whisperlivekit.basic_server:app",
-        help="The FastAPI app to run.",
-    )
-    parser.add_argument(
         "--host",
         type=str,
         default="localhost",
@@ -39,7 +33,7 @@ def parse_args():
     parser.add_argument(
         "--diarization",
         action="store_true",
-        default=True,
+        default=False,
         help="Enable speaker diarization.",
     )
 
@@ -113,7 +107,7 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="medium",
+        default="base",
         dest="model_size",
         help="Name size of the Whisper model to use (default: tiny). Suggested values: tiny.en,tiny,base.en,base,small.en,small,medium.en,medium,large-v1,large-v2,large-v3,large,large-v3-turbo. The model is automatically downloaded from the model hub if not present in model cache dir.",
     )
@@ -141,7 +135,7 @@ def parse_args():
         "--lan",
         "--language",
         type=str,
-        default="es",
+        default="auto",
         dest="lan",
         help="Source language code, e.g. en,de,cs, or 'auto' for language detection.",
     )
