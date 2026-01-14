@@ -40,6 +40,7 @@ dependencies = [
     "sounddevice>=0.5.3",
     "nemo-toolkit[asr]",
     "pyarrow<21.0.0", # pin because datasets (pulled by NeMo) still expects PyExtensionType removed in 21+
+    "aiofiles>=25.1.0",
 ]
 
 [project.optional-dependencies]
